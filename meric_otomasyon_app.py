@@ -30,7 +30,7 @@ def get_image_base64(image_path):
 istestate_logo_b64 = get_image_base64("istestate_logo.png")
 meric_logo_b64 = get_image_base64("meric_insaat_emlak_logo.png")
 
-# Sayı Temizleme Fonksiyonu (TR/US Format Dönüştürücü)
+# Sayı Temizleme Fonksiyonu
 def parse_float(val_str):
     if not val_str:
         return None
@@ -105,42 +105,47 @@ def parse_imar_pdf(pdf_bytes):
         for page in pdf.pages:
             text += (page.extract_text() or "") + "\n"
     
-    # Mahalle Tespit
-    mahalleler = ["Baklacı", "Görele", "Çiftlik", "Yavuzselim", "Çengeldere", "Fatih"]
-    for m in mahalleler:
-        if re.search(r'\b' + m + r'\b', text, re.IGNORECASE):
-            extracted['mahalle'] = m
+    # Türkçe Harf Uyumlu Mahalle Tespiti
+    mahalle_map = {
+        "ÇİFTLİK": "Çiftlik", "CİFTLİK": "Çiftlik", "CIFTLIK": "Çiftlik",
+        "BAKLACI": "Baklacı", "GÖRELE": "Görele", "GORELE": "Görele",
+        "YAVUZSELİM": "Yavuzselim", "YAVUZSELIM": "Yavuzselim",
+        "ÇENGELDERE": "Çengeldere", "CENGELDERE": "Çengeldere",
+        "FATİH": "Fatih", "FATIH": "Fatih"
+    }
+    text_upper = text.upper()
+    for key, val in mahalle_map.items():
+        if key in text_upper:
+            extracted['mahalle'] = val
             break
-            
-    # Ada
-    ada_match = re.search(r"Ada\s*\n?\s*(\d+)", text)
-    if ada_match:
-        extracted['ada'] = ada_match.group(1)
+
+    # Tablo Satırından Ada, Parsel ve Brüt Alanı Birlikte Çekme (Örn: 1617 | 13 | 2,131.58 m²)
+    table_match = re.search(r"(\d{3,5})\s*[\|\s]+\s*(\d{1,5})\s*[\|\s]+\s*([\d\.,]+)\s*m²", text)
+    if table_match:
+        extracted['ada'] = table_match.group(1)
+        extracted['parsel'] = table_match.group(2)
+        extracted['brut_alan'] = parse_float(table_match.group(3))
+    else:
+        # Yedek Regex Desenleri
+        ada_m = re.search(r"Ada\s*[:\n\|\s]*(\d+)", text, re.IGNORECASE)
+        if ada_m: extracted['ada'] = ada_m.group(1)
         
-    # Parsel
-    parsel_match = re.search(r"Parsel\s*\n?\s*(\d+)", text)
-    if parsel_match:
-        extracted['parsel'] = parsel_match.group(1)
+        parsel_m = re.search(r"Parsel\s*[:\n\|\s]*(\d+)", text, re.IGNORECASE)
+        if parsel_m: extracted['parsel'] = parsel_m.group(1)
+        
+        alan_m = re.search(r"([\d\.,]+)\s*m²", text)
+        if alan_m: extracted['brut_alan'] = parse_float(alan_m.group(1))
 
-    # Arazi Alanı (m²) Okuma - Toplam Parsel Alanı veya Konut Alanı
-    alan_matches = re.findall(r"([\d\.,]+)\s*m²", text)
-    if alan_matches:
-        for am in alan_matches:
-            val = parse_float(am)
-            if val and val > 100.0:
-                extracted['brut_alan'] = val
-                break
-
-    # KAKS (Emsal) - 0'dan büyük Konut imar oranını al
-    kaks_matches = re.findall(r"Kaks\s*\(Emsal\)\s*\n?\s*([\d\.,]+)", text, re.IGNORECASE)
+    # KAKS (Emsal) - Konut İmarı Oranını Önceliklendir
+    kaks_matches = re.findall(r"Kaks\s*\(Emsal\)\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
     for km in kaks_matches:
         val = parse_float(km)
         if val is not None and val > 0:
             extracted['kaks'] = val
             break
 
-    # TAKS - 0'dan büyük olanı al
-    taks_matches = re.findall(r"Taks\s*\n?\s*([\d\.,]+)", text, re.IGNORECASE)
+    # TAKS
+    taks_matches = re.findall(r"Taks\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
     for tm in taks_matches:
         val = parse_float(tm)
         if val is not None and val > 0:
@@ -148,7 +153,7 @@ def parse_imar_pdf(pdf_bytes):
             break
 
     # Kat Adedi
-    kat_matches = re.findall(r"Kat Adedi\s*\n?\s*(\d+)", text, re.IGNORECASE)
+    kat_matches = re.findall(r"Kat\s*Adedi\s*[:\n\|\s]*(\d+)", text, re.IGNORECASE)
     for km in kat_matches:
         if km != "0":
             extracted['kat_sayisi'] = f"{km} Kat"
@@ -170,25 +175,26 @@ with tab2:
             parsed_data = parse_imar_pdf(imar_pdf.getvalue())
             for k, v in parsed_data.items():
                 st.session_state[k] = v
-            st.success("🎉 Mahalle, Ada, Parsel, Arazi Alanı (m²), KAKS, TAKS ve Kat Adedi verileri başarıyla aktarıldı!")
+            st.success("🎉 Mahalle, Ada, Parsel, Arazi Alanı, KAKS, TAKS ve Kat Adedi verileri aktarıldı!")
+            st.rerun()
 
 # Sidebar Parametreleri
 st.sidebar.header("📍 1. Taşınmaz Bilgileri")
-mahalle_list = ["Baklacı", "Yavuzselim", "Görele", "Çiftlik", "Çengeldere", "Fatih", "Diğer"]
-default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Baklacı')) if st.session_state.get('mahalle') in mahalle_list else 0
+mahalle_list = ["Çiftlik", "Baklacı", "Yavuzselim", "Görele", "Çengeldere", "Fatih", "Diğer"]
+default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Çiftlik')) if st.session_state.get('mahalle') in mahalle_list else 0
 
 mahalle = st.sidebar.selectbox("Mahalle Seçimi", mahalle_list, index=default_mah_idx)
-ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1324'))
-parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '9'))
+ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1617'))
+parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '13'))
 nitelik = st.sidebar.text_input("Tapu Niteliği", value="Bahçe (Terksiz)")
 imar_durumu = st.sidebar.selectbox("İmar Statüsü", ["Konut Alanı (KDKS)", "Ticari + Konut", "Gelişme Konut Alanı", "Özel Proje Alanı"])
 
 st.sidebar.header("📐 2. Beykoz İmar Parametreleri")
 
-raw_brut = float(st.session_state.get('brut_alan', 22709.72))
+raw_brut = float(st.session_state.get('brut_alan', 2131.58))
 safe_brut = max(100.0, min(500000.0, raw_brut))
 
-raw_kaks = float(st.session_state.get('kaks', 0.40))
+raw_kaks = float(st.session_state.get('kaks', 0.30))
 safe_kaks = max(0.0, min(3.00, raw_kaks))
 
 raw_taks = float(st.session_state.get('taks', 0.30))
@@ -225,7 +231,7 @@ with tab1:
     st.subheader("📌 Anlık İmar ve Fizibilite Özet Tablosu")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown(f'<div class="metric-card"><div class="metric-lbl">Brüt / Net Arazi</div><div class="metric-val">{brut_alan:,.0f} / {net_alan:,.0f} m²</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-lbl">Brüt / Net Arazi</div><div class="metric-val">{brut_alan:,.2f} / {net_alan:,.2f} m²</div></div>', unsafe_allow_html=True)
     with col2:
         st.markdown(f'<div class="metric-card"><div class="metric-lbl">Top. İnşaat Alanı</div><div class="metric-val">{toplam_inşaat_alani:,.1f} m²</div></div>', unsafe_allow_html=True)
     with col3:
@@ -236,7 +242,7 @@ with tab1:
     st.markdown("---")
     st.subheader("🔍 Çıktı Öncesi Özel Notlar")
     ozel_not = st.text_area("Sunuma Eklenecek Özel Notlar / Ekspertiz Görüşü", 
-                            value=f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.0f} m² bahçe niteliğindeki arazide %{terk_orani:.0f} terk sonrası net {net_alan:,.0f} m² inşaat alanı kalmaktadır. Kat karşılığı %{kat_karsiligi_oran} paylaşım modeliyle yüksek karlılık öngörülmektedir.")
+                            value=f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² bahçe niteliğindeki arazide %{terk_orani:.0f} terk sonrası net {net_alan:,.2f} m² inşaat alanı kalmaktadır. Kat karşılığı %{kat_karsiligi_oran} paylaşım modeliyle yüksek karlılık öngörülmektedir.")
 
 with tab3:
     st.subheader("🖨️ Kurumsal Sunum Raporu Basımı")
