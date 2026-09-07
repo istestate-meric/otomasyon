@@ -7,7 +7,8 @@ import streamlit as st
 import pandas as pd
 from weasyprint import HTML
 import base64
-import os
+import io
+from pypdf import PdfWriter, PdfReader
 
 st.set_page_config(
     page_title="Meriç & İstestate Ortak Portföy ve Fizibilite Otomasyonu",
@@ -143,8 +144,16 @@ with tab3:
     st.subheader("🖨️ Müşteri ve Mimar İmzalı Sunum Raporu Basımı")
     st.write("Aşağıdaki butona basarak Istestate ve Meriç İnşaat kurumsal şablonunda tek tıkla PDF üretebilirsiniz.")
     
-    # PDF Oluşturma Butonu
     if st.button("🚀 PDF Sunum Raporunu Oluştur"):
+        # Yüklenen fotoğrafları HTML için base64 biçimine çevirme
+        foto_html = ""
+        if arazi_fotograflari:
+            foto_html += '<div class="section-header">📷 Arazi ve Saha Görselleri</div><div style="display: flex; flex-wrap: wrap; gap: 10px;">'
+            for img in arazi_fotograflari:
+                b64_str = base64.b64encode(img.getvalue()).decode("utf-8")
+                foto_html += f'<img src="data:{img.type};base64,{b64_str}" style="width: 48%; max-height: 250px; object-fit: cover; border-radius: 6px; border: 1px solid #CBD5E1;" />'
+            foto_html += '</div>'
+
         # WeasyPrint için Kurumsal HTML Şablonu
         html_content = f"""
         <!DOCTYPE html>
@@ -193,7 +202,7 @@ with tab3:
             <table>
                 <tr><th>Net Emsal İnşaat Alanı</th><td>{net_emsal_inşaat_alani:,.2f} m²</td></tr>
                 <tr><th>Taban Oturum Alanı (TAKS)</th><td>{taban_alani:,.2f} m²</td></tr>
-                <tr class="highlight-row"><th>Toplam Toplam İnşaat Alanı (Satılabilir/Kullanılabilir)</th><td>{toplam_inşaat_alani:,.2f} m²</td></tr>
+                <tr class="highlight-row"><th>Toplam İnşaat Alanı (Satılabilir/Kullanılabilir)</th><td>{toplam_inşaat_alani:,.2f} m²</td></tr>
             </table>
 
             <div class="section-header">💰 3. Kat Karşılığı Fizibilite ve Karlılık Tablosu</div>
@@ -210,6 +219,8 @@ with tab3:
                 {ozel_not}
             </div>
 
+            {foto_html}
+
             <div class="footer">
                 Bu rapor Istestate Gayrimenkul ve Meriç İnşaat Emlak bilgi sistemleri tarafından otomatik üretilmiştir.<br>
                 Resmi belge niteliği taşımaz, fizibilite ve ön inceleme amaçlıdır.
@@ -219,17 +230,32 @@ with tab3:
         """
         
         try:
-            pdf_bytes = HTML(string=html_content).write_pdf()
-            st.session_state['pdf_bytes'] = pdf_bytes
-            st.success("✅ PDF Sunum Raporu başarıyla oluşturuldu!")
+            # 1. Ana Rapor PDF'ini üret
+            main_pdf_bytes = HTML(string=html_content).write_pdf()
+            
+            # 2. Eğer kullanıcı İmar Durum PDF'i yüklediyse ana raporun sonuna ekle (birleştir)
+            if imar_pdf is not None:
+                merger = PdfWriter()
+                merger.append(io.BytesIO(main_pdf_bytes))
+                merger.append(io.BytesIO(imar_pdf.getvalue()))
+                
+                final_output = io.BytesIO()
+                merger.write(final_output)
+                final_pdf_bytes = final_output.getvalue()
+                merger.close()
+            else:
+                final_pdf_bytes = main_pdf_bytes
+
+            st.session_state['pdf_bytes'] = final_pdf_bytes
+            st.success("✅ Rapor ve İmar Durum Belgesi başarıyla birleştirildi!")
         except Exception as e:
             st.error(f"PDF oluşturulurken bir hata meydana geldi: {e}")
 
-    # Oturum Hafızasında (Session State) PDF Varsa İndirme Butonunu Göster
+    # Oturum Hafızasında PDF Varsa İndirme Butonunu Göster
     if 'pdf_bytes' in st.session_state:
         st.download_button(
-            label="📥 PDF Raporunu Bilgisayara İndir",
+            label="📥 Tam Ekli PDF Raporunu Bilgisayara İndir",
             data=st.session_state['pdf_bytes'],
-            file_name=f"Beykoz_{mahalle}_{ada}_{parsel}_Fizibilite_Raporu.pdf",
+            file_name=f"Beykoz_{mahalle}_{ada}_{parsel}_Fizibilite_ve_Imar_Raporu.pdf",
             mime="application/pdf"
         )
