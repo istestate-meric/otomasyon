@@ -105,28 +105,27 @@ def parse_imar_pdf(pdf_bytes):
         for page in pdf.pages:
             text += (page.extract_text() or "") + "\n"
     
-    # Türkçe Harf Uyumlu Mahalle Tespiti
     mahalle_map = {
+        "YAVUZSELİM": "Yavuzselim", "YAVUZSELIM": "Yavuzselim",
         "ÇİFTLİK": "Çiftlik", "CİFTLİK": "Çiftlik", "CIFTLIK": "Çiftlik",
         "BAKLACI": "Baklacı", "GÖRELE": "Görele", "GORELE": "Görele",
-        "YAVUZSELİM": "Yavuzselim", "YAVUZSELIM": "Yavuzselim",
         "ÇENGELDERE": "Çengeldere", "CENGELDERE": "Çengeldere",
         "FATİH": "Fatih", "FATIH": "Fatih"
     }
-    text_upper = text.upper()
-    for key, val in mahalle_map.items():
-        if key in text_upper:
-            extracted['mahalle'] = val
-            break
 
-    # Tablo Satırından Ada, Parsel ve Brüt Alanı Birlikte Çekme (Örn: 1617 | 13 | 2,131.58 m²)
+    # 'Plan Adı' içindeki toplu liste ile karışmaması için sadece 'Mahalle' başlığının hemen yakınındaki metne odaklanılır
+    mah_match = re.search(r"Mahalle[\s\S]{1,120}?(YAVUZSELİM|YAVUZSELIM|ÇİFTLİK|CİFTLİK|CIFTLIK|BAKLACI|GÖRELE|GORELE|ÇENGELDERE|CENGELDERE|FATİH|FATIH)", text, re.IGNORECASE)
+    if mah_match:
+        found_m = mah_match.group(1).upper()
+        extracted['mahalle'] = mahalle_map.get(found_m, "Yavuzselim")
+
+    # Tablo Satırından Ada, Parsel ve Brüt Alanı Birlikte Çekme (Örn: 1647 | 10 | 6,398.86 m²)
     table_match = re.search(r"(\d{3,5})\s*[\|\s]+\s*(\d{1,5})\s*[\|\s]+\s*([\d\.,]+)\s*m²", text)
     if table_match:
         extracted['ada'] = table_match.group(1)
         extracted['parsel'] = table_match.group(2)
         extracted['brut_alan'] = parse_float(table_match.group(3))
     else:
-        # Yedek Regex Desenleri
         ada_m = re.search(r"Ada\s*[:\n\|\s]*(\d+)", text, re.IGNORECASE)
         if ada_m: extracted['ada'] = ada_m.group(1)
         
@@ -136,7 +135,7 @@ def parse_imar_pdf(pdf_bytes):
         alan_m = re.search(r"([\d\.,]+)\s*m²", text)
         if alan_m: extracted['brut_alan'] = parse_float(alan_m.group(1))
 
-    # KAKS (Emsal) - Konut İmarı Oranını Önceliklendir
+    # KAKS (Emsal) - Konut İmarı Oranı (0.40 vb.)
     kaks_matches = re.findall(r"Kaks\s*\(Emsal\)\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
     for km in kaks_matches:
         val = parse_float(km)
@@ -175,26 +174,26 @@ with tab2:
             parsed_data = parse_imar_pdf(imar_pdf.getvalue())
             for k, v in parsed_data.items():
                 st.session_state[k] = v
-            st.success("🎉 Mahalle, Ada, Parsel, Arazi Alanı, KAKS, TAKS ve Kat Adedi verileri aktarıldı!")
+            st.success("🎉 Mahalle, Ada, Parsel, Arazi Alanı, KAKS, TAKS ve Kat Adedi verileri başarıyla aktarıldı!")
             st.rerun()
 
 # Sidebar Parametreleri
 st.sidebar.header("📍 1. Taşınmaz Bilgileri")
-mahalle_list = ["Çiftlik", "Baklacı", "Yavuzselim", "Görele", "Çengeldere", "Fatih", "Diğer"]
-default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Çiftlik')) if st.session_state.get('mahalle') in mahalle_list else 0
+mahalle_list = ["Yavuzselim", "Çiftlik", "Baklacı", "Görele", "Çengeldere", "Fatih", "Diğer"]
+default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Yavuzselim')) if st.session_state.get('mahalle') in mahalle_list else 0
 
 mahalle = st.sidebar.selectbox("Mahalle Seçimi", mahalle_list, index=default_mah_idx)
-ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1617'))
-parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '13'))
+ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1647'))
+parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '10'))
 nitelik = st.sidebar.text_input("Tapu Niteliği", value="Bahçe (Terksiz)")
 imar_durumu = st.sidebar.selectbox("İmar Statüsü", ["Konut Alanı (KDKS)", "Ticari + Konut", "Gelişme Konut Alanı", "Özel Proje Alanı"])
 
 st.sidebar.header("📐 2. Beykoz İmar Parametreleri")
 
-raw_brut = float(st.session_state.get('brut_alan', 2131.58))
+raw_brut = float(st.session_state.get('brut_alan', 6398.86))
 safe_brut = max(100.0, min(500000.0, raw_brut))
 
-raw_kaks = float(st.session_state.get('kaks', 0.30))
+raw_kaks = float(st.session_state.get('kaks', 0.40))
 safe_kaks = max(0.0, min(3.00, raw_kaks))
 
 raw_taks = float(st.session_state.get('taks', 0.30))
