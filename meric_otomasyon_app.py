@@ -6,7 +6,6 @@
 import streamlit as st
 import pandas as pd
 from weasyprint import HTML
-import tempfile
 import base64
 import os
 
@@ -144,5 +143,93 @@ with tab3:
     st.subheader("🖨️ Müşteri ve Mimar İmzalı Sunum Raporu Basımı")
     st.write("Aşağıdaki butona basarak Istestate ve Meriç İnşaat kurumsal şablonunda tek tıkla PDF üretebilirsiniz.")
     
+    # PDF Oluşturma Butonu
     if st.button("🚀 PDF Sunum Raporunu Oluştur"):
-        st.success("PDF Raporu Hazırlandı! İndirmek için tıklayınız.")
+        # WeasyPrint için Kurumsal HTML Şablonu
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="tr">
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                @page {{ size: A4; margin: 20mm; }}
+                body {{ font-family: Arial, sans-serif; color: #1E293B; line-height: 1.5; }}
+                .header {{ border-bottom: 3px solid #F59E0B; padding-bottom: 12px; margin-bottom: 20px; }}
+                .title {{ font-size: 20px; font-weight: bold; color: #1E293B; margin: 0; }}
+                .subtitle {{ font-size: 12px; color: #64748B; margin-top: 5px; }}
+                .badge-container {{ margin-bottom: 15px; }}
+                .badge {{ background-color: #1E293B; color: #fff; padding: 5px 10px; font-size: 11px; font-weight: bold; border-radius: 4px; display: inline-block; }}
+                .badge-orange {{ background-color: #F59E0B; color: #1E293B; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 20px; }}
+                th, td {{ border: 1px solid #E2E8F0; padding: 8px 12px; font-size: 12px; text-align: left; }}
+                th {{ background-color: #F8FAFC; color: #475569; }}
+                .highlight-row {{ background-color: #FEF3C7; font-weight: bold; }}
+                .section-header {{ font-size: 14px; font-weight: bold; color: #0F172A; border-left: 4px solid #F59E0B; padding-left: 8px; margin-top: 25px; margin-bottom: 10px; }}
+                .note-box {{ background-color: #F8FAFC; border: 1px solid #CBD5E1; padding: 12px; font-size: 11px; border-radius: 6px; font-style: italic; }}
+                .footer {{ margin-top: 40px; text-align: center; font-size: 10px; color: #94A3B8; border-top: 1px solid #E2E8F0; padding-top: 10px; }}
+            </style>
+        </head>
+        <body>
+            <div class="badge-container">
+                <span class="badge">İSTESTATE GAYRİMENKUL</span>
+                <span class="badge badge-orange">MERİÇ İNŞAAT EMLAK</span>
+            </div>
+            
+            <div class="header">
+                <div class="title">ARSA İMAR VE FİZİBİLİTE ANALİZ RAPORU</div>
+                <div class="subtitle">Beykoz / {mahalle} Mahallesi - {ada} Ada / {parsel} Parsel</div>
+            </div>
+
+            <div class="section-header">📍 1. Taşınmaz ve İmar Durum Bilgileri</div>
+            <table>
+                <tr><th>Mahalle / Konum</th><td>Beykoz / {mahalle}</td><th>Tapu Niteliği</th><td>{nitelik}</td></tr>
+                <tr><th>Ada / Parsel</th><td>{ada} / {parsel}</td><th>İmar Statüsü</th><td>{imar_durumu}</td></tr>
+                <tr><th>Brüt Arazi Alanı</th><td>{brut_alan:,.0f} m²</td><th>Terk Oranı</th><td>%{terk_orani:.0f}</td></tr>
+                <tr><th>Net Arazi Alanı</th><td>{net_alan:,.0f} m²</td><th>KAKS (Emsal) / TAKS</th><td>{kaks:.2f} / {taks:.2f}</td></tr>
+                <tr><th>Maksimum Kat İzni</th><td>{kat_sayisi}</td><th>Emsal Dışı Çarpan</th><td>{emsal_harici_carpan:.2f}</td></tr>
+            </table>
+
+            <div class="section-header">📐 2. İnşaat ve Yapılaşma Kapasitesi</div>
+            <table>
+                <tr><th>Net Emsal İnşaat Alanı</th><td>{net_emsal_inşaat_alani:,.2f} m²</td></tr>
+                <tr><th>Taban Oturum Alanı (TAKS)</th><td>{taban_alani:,.2f} m²</td></tr>
+                <tr class="highlight-row"><th>Toplam Toplam İnşaat Alanı (Satılabilir/Kullanılabilir)</th><td>{toplam_inşaat_alani:,.2f} m²</td></tr>
+            </table>
+
+            <div class="section-header">💰 3. Kat Karşılığı Fizibilite ve Karlılık Tablosu</div>
+            <table>
+                <tr><th>M² İnşaat Birim Maliyeti</th><td>{maliyet_m2:,.0f} ₺</td><th>Bölgesel M² Satış Rayici</th><td>{satis_m2:,.0f} ₺</td></tr>
+                <tr><th>Toplam Proje Maliyeti</th><td>{toplam_maliyet:,.0f} ₺</td><th>Toplam Proje Hasılatı</th><td>{toplam_hasilat:,.0f} ₺</td></tr>
+                <tr><th>Kat Karşılığı Paylaşım Oranı</th><td colspan="3">% {kat_karsiligi_oran} Müteahhit / % {100 - kat_karsiligi_oran} Arsa Sahibi</td></tr>
+                <tr><th>Müteahhit Hasılat Payı</th><td>{muteahhit_hasilat_payi:,.0f} ₺</td><th>Arsa Sahibi Hasılat Payı</th><td>{arsa_sahibi_hasilat_payi:,.0f} ₺</td></tr>
+                <tr class="highlight-row"><th>Müteahhit Net Karı</th><td>{muteahhit_net_kar:,.0f} ₺</td><th>Öngörülen Kar Marjı</th><td>%{kar_marji:.1f}</td></tr>
+            </table>
+
+            <div class="section-header">📝 4. Ekspertiz Notları ve Değerlendirme</div>
+            <div class="note-box">
+                {ozel_not}
+            </div>
+
+            <div class="footer">
+                Bu rapor Istestate Gayrimenkul ve Meriç İnşaat Emlak bilgi sistemleri tarafından otomatik üretilmiştir.<br>
+                Resmi belge niteliği taşımaz, fizibilite ve ön inceleme amaçlıdır.
+            </div>
+        </body>
+        </html>
+        """
+        
+        try:
+            pdf_bytes = HTML(string=html_content).write_pdf()
+            st.session_state['pdf_bytes'] = pdf_bytes
+            st.success("✅ PDF Sunum Raporu başarıyla oluşturuldu!")
+        except Exception as e:
+            st.error(f"PDF oluşturulurken bir hata meydana geldi: {e}")
+
+    # Oturum Hafızasında (Session State) PDF Varsa İndirme Butonunu Göster
+    if 'pdf_bytes' in st.session_state:
+        st.download_button(
+            label="📥 PDF Raporunu Bilgisayara İndir",
+            data=st.session_state['pdf_bytes'],
+            file_name=f"Beykoz_{mahalle}_{ada}_{parsel}_Fizibilite_Raporu.pdf",
+            mime="application/pdf"
+        )
