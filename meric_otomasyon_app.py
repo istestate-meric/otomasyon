@@ -97,7 +97,7 @@ with col_l2:
 
 st.markdown('<div class="main-title">Beykoz Arsa İmar, Kat Karşılığı Fizibilite ve Otomatik Sunum Hazırlayıcı</div>', unsafe_allow_html=True)
 
-# Akıllı İmar PDF Okuma ve Terk / Arsa Tespiti Fonksiyonu
+# Akıllı İmar PDF Okuma ve Otomatik Arsa/Bahçe (Terk) Tespiti Fonksiyonu
 def parse_imar_pdf(pdf_bytes):
     extracted = {}
     text = ""
@@ -113,13 +113,13 @@ def parse_imar_pdf(pdf_bytes):
         "FATİH": "Fatih", "FATIH": "Fatih"
     }
 
-    # Mahalle Tespiti
+    # 1. Mahalle Tespiti
     mah_match = re.search(r"Mahalle[\s\S]{1,120}?(YAVUZSELİM|YAVUZSELIM|ÇİFTLİK|CİFTLİK|CIFTLIK|BAKLACI|GÖRELE|GORELE|ÇENGELDERE|CENGELDERE|FATİH|FATIH)", text, re.IGNORECASE)
     if mah_match:
         found_m = mah_match.group(1).upper()
-        extracted['mahalle'] = mahalle_map.get(found_m, "Çiftlik")
+        extracted['mahalle'] = mahalle_map.get(found_m, "Yavuzselim")
 
-    # Ada, Parsel ve Brüt Alan Tespiti
+    # 2. Ada, Parsel ve Brüt Alan Tespiti
     table_match = re.search(r"(\d{3,5})\s*[\|\s]+\s*(\d{1,5})\s*[\|\s]+\s*([\d\.,]+)\s*m²", text)
     if table_match:
         extracted['ada'] = table_match.group(1)
@@ -135,28 +135,37 @@ def parse_imar_pdf(pdf_bytes):
         alan_m = re.search(r"([\d\.,]+)\s*m²", text)
         if alan_m: extracted['brut_alan'] = parse_float(alan_m.group(1))
 
-    # Fonksiyon Alanına Giren M² Tespiti ve TERKSİZ/TERKLİ Arsa Algılama Logic'i
-    fonk_match = re.search(r"Fonksiyon Alanına\s*Giren\s*\(m²\)\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
-    if fonk_match and extracted.get('brut_alan'):
-        fonk_m2 = parse_float(fonk_match.group(1))
-        brut_m2 = extracted['brut_alan']
-        
-        if fonk_m2 and brut_m2 > 0:
-            oran = fonk_m2 / brut_m2
-            # Eğer Fonksiyon Alanı Brüt Alanın %95'i ve üzerindeyse TERK YAPILMIŞTIR (ARSA)
-            if oran >= 0.95:
+    # 3. Terk Durumu ve Tapu Niteliği (Arsa / Bahçe) Algılama Logic'i
+    fonk_perc_match = re.search(r"Fonksiyon Alanına\s*Giren[\s\S]{0,50}?%([\d\.,]+)", text, re.IGNORECASE)
+    
+    if fonk_perc_match:
+        perc_val = parse_float(fonk_perc_match.group(1))
+        if perc_val is not None:
+            if perc_val >= 98.0:
                 extracted['terk_orani'] = 0.0
-                extracted['nitelik'] = "Arsa (Terki Yapılmış)"
+                extracted['nitelik'] = "Arsa"
             else:
-                # Terk yapılmamışsa gerçek terk oranını hesapla
-                calc_terk = max(0.0, (1.0 - oran) * 100.0)
-                extracted['terk_orani'] = round(calc_terk, 1)
-                extracted['nitelik'] = "Bahçe / Ham Arazi (Terksiz)"
-    else:
-        extracted['terk_orani'] = 30.0
-        extracted['nitelik'] = "Bahçe (Terksiz)"
+                extracted['terk_orani'] = round(100.0 - perc_val, 1)
+                extracted['nitelik'] = "Bahçe"
+    
+    if 'terk_orani' not in extracted:
+        fonk_m2_match = re.search(r"Fonksiyon Alanına\s*Giren[\s\S]{0,80}?([\d\.,]+)\s*m²", text, re.IGNORECASE)
+        if fonk_m2_match and extracted.get('brut_alan'):
+            fonk_m2 = parse_float(fonk_m2_match.group(1))
+            brut_m2 = extracted['brut_alan']
+            if fonk_m2 and brut_m2 > 0:
+                if fonk_m2 >= (brut_m2 * 0.98):
+                    extracted['terk_orani'] = 0.0
+                    extracted['nitelik'] = "Arsa"
+                else:
+                    extracted['terk_orani'] = round((1.0 - (fonk_m2 / brut_m2)) * 100.0, 1)
+                    extracted['nitelik'] = "Bahçe"
 
-    # KAKS (Emsal)
+    if 'terk_orani' not in extracted:
+        extracted['terk_orani'] = 0.0
+        extracted['nitelik'] = "Arsa"
+
+    # 4. KAKS (Emsal)
     kaks_matches = re.findall(r"Kaks\s*\(Emsal\)\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
     for km in kaks_matches:
         val = parse_float(km)
@@ -164,7 +173,7 @@ def parse_imar_pdf(pdf_bytes):
             extracted['kaks'] = val
             break
 
-    # TAKS
+    # 5. TAKS
     taks_matches = re.findall(r"Taks\s*[:\n\|\s]*([\d\.,]+)", text, re.IGNORECASE)
     for tm in taks_matches:
         val = parse_float(tm)
@@ -172,7 +181,7 @@ def parse_imar_pdf(pdf_bytes):
             extracted['taks'] = val
             break
 
-    # Kat Adedi
+    # 6. Kat Adedi
     kat_matches = re.findall(r"Kat\s*Adedi\s*[:\n\|\s]*(\d+)", text, re.IGNORECASE)
     for km in kat_matches:
         if km != "0":
@@ -196,27 +205,33 @@ with tab2:
             for k, v in parsed_data.items():
                 st.session_state[k] = v
             
-            terk_durum_msj = "Arsa Terki Yapılmış (%0 Terk)" if st.session_state.get('terk_orani', 30.0) == 0.0 else f"Terk Oranı %{st.session_state.get('terk_orani')} Olarak Tespit Edildi"
-            st.success(f"🎉 İmar Verileri Başarıyla Aktarıldı! [{terk_durum_msj}]")
+            terk_val = st.session_state.get('terk_orani', 0.0)
+            nitelik_val = st.session_state.get('nitelik', 'Arsa')
+            
+            if terk_val == 0.0:
+                st.success("🎉 İmar Verileri Aktarıldı: Terki Yapılmış Arazidir (%0 Terk) -> Tapu Niteliği 'Arsa' Olarak Ayarlandı.")
+            else:
+                st.info(f"🎉 İmar Verileri Aktarıldı: Terksiz Arazidir (%{terk_val} Terk Gereklidir) -> Tapu Niteliği 'Bahçe' Olarak Ayarlandı.")
+            
             st.rerun()
 
 # Sidebar Parametreleri
 st.sidebar.header("📍 1. Taşınmaz Bilgileri")
 mahalle_list = ["Yavuzselim", "Çiftlik", "Baklacı", "Görele", "Çengeldere", "Fatih", "Diğer"]
-default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Çiftlik')) if st.session_state.get('mahalle') in mahalle_list else 1
+default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Yavuzselim')) if st.session_state.get('mahalle') in mahalle_list else 0
 
 mahalle = st.sidebar.selectbox("Mahalle Seçimi", mahalle_list, index=default_mah_idx)
-ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1617'))
-parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '29'))
-nitelik = st.sidebar.text_input("Tapu Niteliği", value=st.session_state.get('nitelik', 'Arsa (Terki Yapılmış)'))
+ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '2421'))
+parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '4'))
+nitelik = st.sidebar.text_input("Tapu Niteliği", value=st.session_state.get('nitelik', 'Arsa'))
 imar_durumu = st.sidebar.selectbox("İmar Statüsü", ["Konut Alanı (KDKS)", "Ticari + Konut", "Gelişme Konut Alanı", "Özel Proje Alanı"])
 
 st.sidebar.header("📐 2. Beykoz İmar Parametreleri")
 
-raw_brut = float(st.session_state.get('brut_alan', 3068.39))
+raw_brut = float(st.session_state.get('brut_alan', 7346.76))
 safe_brut = max(100.0, min(500000.0, raw_brut))
 
-raw_kaks = float(st.session_state.get('kaks', 0.30))
+raw_kaks = float(st.session_state.get('kaks', 0.45))
 safe_kaks = max(0.0, min(3.00, raw_kaks))
 
 raw_taks = float(st.session_state.get('taks', 0.30))
@@ -267,7 +282,11 @@ with tab1:
     st.markdown("---")
     st.subheader("🔍 Çıktı Öncesi Özel Notlar")
     
-    default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² {nitelik.lower()} arazisinde terki tamamlanmış net {net_alan:,.2f} m² alan üzerinden hesaplama yapılmıştır." if terk_orani == 0 else f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² arazide %{terk_orani:.0f} terk sonrası net {net_alan:,.2f} m² inşaat alanı kalmaktadır."
+    if terk_orani == 0:
+        default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² terki yapılmış {nitelik.lower()} arazisinde net {net_alan:,.2f} m² alan üzerinden hesaplama yapılmıştır."
+    else:
+        default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² {nitelik.lower()} arazide %{terk_orani:.0f} terk sonrası net {net_alan:,.2f} m² inşaat alanı kalmaktadır."
+        
     ozel_not = st.text_area("Sunuma Eklenecek Özel Notlar / Ekspertiz Görüşü", value=default_not)
 
 with tab3:
