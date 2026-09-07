@@ -2,4 +2,5 @@ streamlit
 pandas
 weasyprint
 pypdf
+pdfplumber
 Pillow
