@@ -76,16 +76,16 @@ with col_l2:
 
 st.markdown('<div class="main-title">Beykoz Arsa İmar, Kat Karşılığı Fizibilite ve Otomatik Sunum Hazırlayıcı</div>', unsafe_allow_html=True)
 
-# Otomatik İmar PDF Okuma Fonksiyonu
+# Geliştirilmiş Akıllı İmar PDF Okuma Fonksiyonu
 def parse_imar_pdf(pdf_bytes):
     extracted = {}
+    text = ""
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        text = ""
         for page in pdf.pages:
-            text += page.extract_text() + "\n"
+            text += (page.extract_text() or "") + "\n"
     
     # Mahalle Tespit
-    mahalleler = ["Görele", "Çiftlik", "Baklacı", "Yavuzselim", "Çengeldere", "Fatih"]
+    mahalleler = ["Baklacı", "Görele", "Çiftlik", "Yavuzselim", "Çengeldere", "Fatih"]
     for m in mahalleler:
         if re.search(r'\b' + m + r'\b', text, re.IGNORECASE):
             extracted['mahalle'] = m
@@ -110,26 +110,39 @@ def parse_imar_pdf(pdf_bytes):
         except:
             pass
 
-    # KAKS / Emsal
-    kaks_match = re.search(r"Kaks\s*\(Emsal\)\s*\n?\s*([\d\.,]+)", text)
-    if kaks_match:
+    # KAKS (Emsal) - 0'dan büyük Konut imar oranını önceliklendir
+    kaks_matches = re.findall(r"Kaks\s*\(Emsal\)\s*\n?\s*([\d\.,]+)", text, re.IGNORECASE)
+    for km in kaks_matches:
         try:
-            extracted['kaks'] = float(kaks_match.group(1).replace(",", "."))
+            val = float(km.replace(",", "."))
+            if val > 0:
+                extracted['kaks'] = val
+                break
+        except:
+            pass
+    if 'kaks' not in extracted and kaks_matches:
+        try:
+            extracted['kaks'] = float(kaks_matches[0].replace(",", "."))
         except:
             pass
 
-    # TAKS
-    taks_match = re.search(r"Taks\s*\n?\s*([\d\.,]+)", text)
-    if taks_match:
+    # TAKS - 0'dan büyük olanı al
+    taks_matches = re.findall(r"Taks\s*\n?\s*([\d\.,]+)", text, re.IGNORECASE)
+    for tm in taks_matches:
         try:
-            extracted['taks'] = float(taks_match.group(1).replace(",", "."))
+            val = float(tm.replace(",", "."))
+            if val > 0:
+                extracted['taks'] = val
+                break
         except:
             pass
 
-    # Kat Adedi
-    kat_match = re.search(r"Kat Adedi\s*\n?\s*(\d+)", text)
-    if kat_match:
-        extracted['kat_sayisi'] = f"{kat_match.group(1)} Kat"
+    # Kat Adedi - 0 olmayan kat iznini al
+    kat_matches = re.findall(r"Kat Adedi\s*\n?\s*(\d+)", text, re.IGNORECASE)
+    for km in kat_matches:
+        if km != "0":
+            extracted['kat_sayisi'] = f"{km} Kat"
+            break
 
     return extracted
 
@@ -143,30 +156,40 @@ with tab2:
     
     if imar_pdf:
         st.success(f"✅ İmar Durum Belgesi Yüklendi: {imar_pdf.name}")
-        # PDF Otomatik Ayrıştırma
         if st.button("⚡ İmar Durumu Verilerini PDF'ten Otomatik Çek ve Hesapla"):
             parsed_data = parse_imar_pdf(imar_pdf.getvalue())
             for k, v in parsed_data.items():
                 st.session_state[k] = v
             st.success("🎉 Mahalle, Ada, Parsel, KAKS, TAKS ve Kat Adedi verileri başarıyla aktarıldı!")
 
-# Sidebar Parametreleri (Session State Entegrasyonu ile)
+# Safe Clamping & Sidebar Parameters
 st.sidebar.header("📍 1. Taşınmaz Bilgileri")
-mahalle_list = ["Yavuzselim", "Görele", "Çiftlik", "Baklacı", "Çengeldere", "Fatih", "Diğer"]
-default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Yavuzselim')) if st.session_state.get('mahalle') in mahalle_list else 0
+mahalle_list = ["Baklacı", "Yavuzselim", "Görele", "Çiftlik", "Çengeldere", "Fatih", "Diğer"]
+default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Baklacı')) if st.session_state.get('mahalle') in mahalle_list else 0
 
 mahalle = st.sidebar.selectbox("Mahalle Seçimi", mahalle_list, index=default_mah_idx)
-ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1647'))
-parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '10'))
+ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1324'))
+parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '9'))
 nitelik = st.sidebar.text_input("Tapu Niteliği", value="Bahçe (Terksiz)")
 imar_durumu = st.sidebar.selectbox("İmar Statüsü", ["Konut Alanı (KDKS)", "Ticari + Konut", "Gelişme Konut Alanı", "Özel Proje Alanı"])
 
 st.sidebar.header("📐 2. Beykoz İmar Parametreleri")
-brut_alan = st.sidebar.number_input("Brüt Arazi Alanı (m²)", min_value=100.0, max_value=200000.0, value=float(st.session_state.get('brut_alan', 6399.0)), step=50.0)
+
+# Sınır Güvenliği (Clamping)
+raw_brut = float(st.session_state.get('brut_alan', 6399.0))
+safe_brut = max(100.0, min(200000.0, raw_brut))
+
+raw_kaks = float(st.session_state.get('kaks', 0.40))
+safe_kaks = max(0.0, min(3.00, raw_kaks))
+
+raw_taks = float(st.session_state.get('taks', 0.30))
+safe_taks = max(0.0, min(0.80, raw_taks))
+
+brut_alan = st.sidebar.number_input("Brüt Arazi Alanı (m²)", min_value=100.0, max_value=200000.0, value=safe_brut, step=50.0)
 terk_orani = st.sidebar.slider("Terk Oranı (% - DOP / Yol / Park)", min_value=0.0, max_value=45.0, value=30.0, step=5.0)
-kaks = st.sidebar.number_input("KAKS (Emsal)", min_value=0.10, max_value=3.00, value=float(st.session_state.get('kaks', 0.45)), step=0.05)
+kaks = st.sidebar.number_input("KAKS (Emsal)", min_value=0.00, max_value=3.00, value=safe_kaks, step=0.05)
 emsal_harici_carpan = st.sidebar.number_input("Emsal Dışı İnşaat Çarpanı", min_value=1.00, max_value=1.50, value=1.30, step=0.05)
-taks = st.sidebar.number_input("TAKS (Taban Alanı Katsayısı)", min_value=0.10, max_value=0.80, value=float(st.session_state.get('taks', 0.30)), step=0.05)
+taks = st.sidebar.number_input("TAKS (Taban Alanı Katsayısı)", min_value=0.00, max_value=0.80, value=safe_taks, step=0.05)
 kat_sayisi = st.sidebar.text_input("Maksimum Kat İzni", value=st.session_state.get('kat_sayisi', '2 Kat'))
 
 st.sidebar.header("💰 3. Maliyet ve Satış Parametreleri")
@@ -209,7 +232,6 @@ with tab1:
 with tab3:
     st.subheader("🖨️ Kurumsal Sunum Raporu Basımı")
     if st.button("🚀 Logolu PDF Sunum Raporunu Oluştur"):
-        # Fotoğrafları hazırlar
         foto_html = ""
         if arazi_fotograflari:
             foto_html += '<div class="section-header">📷 Arazi ve Saha Görselleri</div><div style="display: flex; flex-wrap: wrap; gap: 10px;">'
@@ -218,7 +240,6 @@ with tab3:
                 foto_html += f'<img src="data:{img.type};base64,{b64_str}" style="width: 48%; max-height: 220px; object-fit: cover; border-radius: 6px; border: 1px solid #CBD5E1;" />'
             foto_html += '</div>'
 
-        # Logo HTML Yapısı
         logo_header_html = '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #F59E0B; padding-bottom: 10px;">'
         if istestate_logo_b64:
             logo_header_html += f'<img src="data:image/png;base64,{istestate_logo_b64}" style="height: 55px;" />'
