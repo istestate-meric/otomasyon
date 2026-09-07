@@ -97,7 +97,7 @@ with col_l2:
 
 st.markdown('<div class="main-title">Beykoz Arsa İmar, Kat Karşılığı Fizibilite ve Otomatik Sunum Hazırlayıcı</div>', unsafe_allow_html=True)
 
-# Akıllı İmar PDF Okuma ve Otomatik Arsa/Bahçe (Terk) Tespiti Fonksiyonu
+# Akıllı İmar PDF Okuma ve Doğrudan "KONUT ALANI" Odaklı Terk/Nitelik Tespiti
 def parse_imar_pdf(pdf_bytes):
     extracted = {}
     text = ""
@@ -114,10 +114,9 @@ def parse_imar_pdf(pdf_bytes):
     }
 
     # 1. Mahalle Tespiti
-    mah_match = re.search(r"Mahalle[\s\S]{1,120}?(YAVUZSELİM|YAVUZSELIM|ÇİFTLİK|CİFTLİK|CIFTLIK|BAKLACI|GÖRELE|GORELE|ÇENGELDERE|CENGELDERE|FATİH|FATIH)", text, re.IGNORECASE)
+    mah_match = re.search(r"(YAVUZSELİM|YAVUZSELIM|ÇİFTLİK|CİFTLİK|CIFTLIK|BAKLACI|GÖRELE|GORELE|ÇENGELDERE|CENGELDERE|FATİH|FATIH)", text, re.IGNORECASE)
     if mah_match:
-        found_m = mah_match.group(1).upper()
-        extracted['mahalle'] = mahalle_map.get(found_m, "Yavuzselim")
+        extracted['mahalle'] = mahalle_map.get(mah_match.group(1).upper(), "Yavuzselim")
 
     # 2. Ada, Parsel ve Brüt Alan Tespiti
     table_match = re.search(r"(\d{3,5})\s*[\|\s]+\s*(\d{1,5})\s*[\|\s]+\s*([\d\.,]+)\s*m²", text)
@@ -135,33 +134,29 @@ def parse_imar_pdf(pdf_bytes):
         alan_m = re.search(r"([\d\.,]+)\s*m²", text)
         if alan_m: extracted['brut_alan'] = parse_float(alan_m.group(1))
 
-    # 3. Terk Durumu ve Tapu Niteliği (Arsa / Bahçe) Algılama Logic'i
-    fonk_perc_match = re.search(r"Fonksiyon Alanına\s*Giren[\s\S]{0,50}?%([\d\.,]+)", text, re.IGNORECASE)
+    # 3. KONUT ALANI Yüzdesi Tespiti ve Terk / Tapu Niteliği Hesabı
+    konut_perc = None
     
-    if fonk_perc_match:
-        perc_val = parse_float(fonk_perc_match.group(1))
-        if perc_val is not None:
-            if perc_val >= 98.0:
-                extracted['terk_orani'] = 0.0
-                extracted['nitelik'] = "Arsa"
-            else:
-                extracted['terk_orani'] = round(100.0 - perc_val, 1)
-                extracted['nitelik'] = "Bahçe"
+    # Desen A: Doğrudan KONUT/TİCARİ ALANI bloğundaki yüzdeyi ara
+    konut_match = re.search(r"(?:KONUT|TİCARİ|TICARI)\s+ALANI[\s\S]{1,250}?Fonksiyon\s+Alanına\s+Giren[\s\S]{0,50}?%([\d\.,]+)", text, re.IGNORECASE)
+    if konut_match:
+        konut_perc = parse_float(konut_match.group(1))
     
-    if 'terk_orani' not in extracted:
-        fonk_m2_match = re.search(r"Fonksiyon Alanına\s*Giren[\s\S]{0,80}?([\d\.,]+)\s*m²", text, re.IGNORECASE)
-        if fonk_m2_match and extracted.get('brut_alan'):
-            fonk_m2 = parse_float(fonk_m2_match.group(1))
-            brut_m2 = extracted['brut_alan']
-            if fonk_m2 and brut_m2 > 0:
-                if fonk_m2 >= (brut_m2 * 0.98):
-                    extracted['terk_orani'] = 0.0
-                    extracted['nitelik'] = "Arsa"
-                else:
-                    extracted['terk_orani'] = round((1.0 - (fonk_m2 / brut_m2)) * 100.0, 1)
-                    extracted['nitelik'] = "Bahçe"
+    # Desen B: Genel eşleşme (Tek fonksiyonlu belgeler için)
+    if konut_perc is None:
+        genel_match = re.search(r"Fonksiyon\s+Alanına\s+Giren[\s\S]{0,50}?%([\d\.,]+)", text, re.IGNORECASE)
+        if genel_match:
+            konut_perc = parse_float(genel_match.group(1))
 
-    if 'terk_orani' not in extracted:
+    # Terk Yapılmışlık ve Tapu Niteliği Logic'i
+    if konut_perc is not None:
+        if konut_perc >= 99.0:
+            extracted['terk_orani'] = 0.0
+            extracted['nitelik'] = "Arsa"
+        else:
+            extracted['terk_orani'] = round(100.0 - konut_perc, 2)
+            extracted['nitelik'] = "Bahçe"
+    else:
         extracted['terk_orani'] = 0.0
         extracted['nitelik'] = "Arsa"
 
@@ -211,7 +206,7 @@ with tab2:
             if terk_val == 0.0:
                 st.success("🎉 İmar Verileri Aktarıldı: Terki Yapılmış Arazidir (%0 Terk) -> Tapu Niteliği 'Arsa' Olarak Ayarlandı.")
             else:
-                st.info(f"🎉 İmar Verileri Aktarıldı: Terksiz Arazidir (%{terk_val} Terk Gereklidir) -> Tapu Niteliği 'Bahçe' Olarak Ayarlandı.")
+                st.warning(f"⚠️ İmar Verileri Aktarıldı: Terki Yapılmamış Arazidir (%{terk_val:.2f} Terk Gereklidir) -> Tapu Niteliği Otomatik Olarak 'Bahçe' Yapıldı.")
             
             st.rerun()
 
@@ -221,14 +216,14 @@ mahalle_list = ["Yavuzselim", "Çiftlik", "Baklacı", "Görele", "Çengeldere", 
 default_mah_idx = mahalle_list.index(st.session_state.get('mahalle', 'Yavuzselim')) if st.session_state.get('mahalle') in mahalle_list else 0
 
 mahalle = st.sidebar.selectbox("Mahalle Seçimi", mahalle_list, index=default_mah_idx)
-ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '2421'))
-parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '4'))
-nitelik = st.sidebar.text_input("Tapu Niteliği", value=st.session_state.get('nitelik', 'Arsa'))
+ada = st.sidebar.text_input("Ada No", value=st.session_state.get('ada', '1658'))
+parsel = st.sidebar.text_input("Parsel No", value=st.session_state.get('parsel', '1'))
+nitelik = st.sidebar.text_input("Tapu Niteliği", value=st.session_state.get('nitelik', 'Bahçe'))
 imar_durumu = st.sidebar.selectbox("İmar Statüsü", ["Konut Alanı (KDKS)", "Ticari + Konut", "Gelişme Konut Alanı", "Özel Proje Alanı"])
 
 st.sidebar.header("📐 2. Beykoz İmar Parametreleri")
 
-raw_brut = float(st.session_state.get('brut_alan', 7346.76))
+raw_brut = float(st.session_state.get('brut_alan', 6721.92))
 safe_brut = max(100.0, min(500000.0, raw_brut))
 
 raw_kaks = float(st.session_state.get('kaks', 0.45))
@@ -237,11 +232,11 @@ safe_kaks = max(0.0, min(3.00, raw_kaks))
 raw_taks = float(st.session_state.get('taks', 0.30))
 safe_taks = max(0.0, min(0.80, raw_taks))
 
-raw_terk = float(st.session_state.get('terk_orani', 0.0))
+raw_terk = float(st.session_state.get('terk_orani', 35.64))
 safe_terk = max(0.0, min(45.0, raw_terk))
 
 brut_alan = st.sidebar.number_input("Brüt Arazi Alanı (m²)", min_value=100.0, max_value=500000.0, value=safe_brut, step=50.0)
-terk_orani = st.sidebar.slider("Terk Oranı (% - DOP / Yol / Park)", min_value=0.0, max_value=45.0, value=safe_terk, step=1.0)
+terk_orani = st.sidebar.number_input("Terk Oranı (%)", min_value=0.0, max_value=45.0, value=safe_terk, step=0.1)
 kaks = st.sidebar.number_input("KAKS (Emsal)", min_value=0.00, max_value=3.00, value=safe_kaks, step=0.05)
 emsal_harici_carpan = st.sidebar.number_input("Emsal Dışı İnşaat Çarpanı", min_value=1.00, max_value=1.50, value=1.30, step=0.05)
 taks = st.sidebar.number_input("TAKS (Taban Alanı Katsayısı)", min_value=0.00, max_value=0.80, value=safe_taks, step=0.05)
@@ -285,7 +280,7 @@ with tab1:
     if terk_orani == 0:
         default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² terki yapılmış {nitelik.lower()} arazisinde net {net_alan:,.2f} m² alan üzerinden hesaplama yapılmıştır."
     else:
-        default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² {nitelik.lower()} arazide %{terk_orani:.0f} terk sonrası net {net_alan:,.2f} m² inşaat alanı kalmaktadır."
+        default_not = f"Beykoz {mahalle} Mahallesi {ada}/{parsel} parselde bulunan {brut_alan:,.2f} m² {nitelik.lower()} arazide %{terk_orani:.2f} terk sonrası net {net_alan:,.2f} m² inşaat alanı kalmaktadır."
         
     ozel_not = st.text_area("Sunuma Eklenecek Özel Notlar / Ekspertiz Görüşü", value=default_not)
 
@@ -311,6 +306,8 @@ with tab3:
         else:
             logo_header_html += '<div style="font-size:16px; font-weight:bold; color:#F59E0B;">MERİÇ İNŞAAT EMLAK</div>'
         logo_header_html += '</div>'
+
+        terk_str_html = f"(Terksiz)" if terk_orani > 0 else "(Terki Yapılmış)"
 
         html_content = f"""
         <!DOCTYPE html>
@@ -339,9 +336,9 @@ with tab3:
 
             <div class="section-header">📍 1. Taşınmaz ve İmar Durum Bilgileri</div>
             <table>
-                <tr><th>Mahalle / Konum</th><td>Beykoz / {mahalle}</td><th>Tapu Niteliği</th><td>{nitelik}</td></tr>
+                <tr><th>Mahalle / Konum</th><td>Beykoz / {mahalle}</td><th>Tapu Niteliği</th><td>{nitelik} {terk_str_html}</td></tr>
                 <tr><th>Ada / Parsel</th><td>{ada} / {parsel}</td><th>İmar Statüsü</th><td>{imar_durumu}</td></tr>
-                <tr><th>Brüt Arazi Alanı</th><td>{brut_alan:,.2f} m²</td><th>Terk Oranı</th><td>%{terk_orani:.0f}</td></tr>
+                <tr><th>Brüt Arazi Alanı</th><td>{brut_alan:,.2f} m²</td><th>Terk Oranı</th><td>%{terk_orani:.2f}</td></tr>
                 <tr><th>Net Arazi Alanı</th><td>{net_alan:,.2f} m²</td><th>KAKS (Emsal) / TAKS</th><td>{kaks:.2f} / {taks:.2f}</td></tr>
                 <tr><th>Maksimum Kat İzni</th><td>{kat_sayisi}</td><th>Emsal Dışı Çarpan</th><td>{emsal_harici_carpan:.2f}</td></tr>
             </table>
